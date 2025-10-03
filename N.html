@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Jalwa — Color & Big/Small Predictor</title>
+  <style>
+    :root{
+      --bg:#07112a; --card:#071935; --panel:#0b1b33; --accent:#12b981; --muted:#9fb3ff;
+      --text:#e6eef8; --table-head:#24407a;
+    }
+    body{margin:0;font-family:Inter,system-ui,Arial;background:linear-gradient(180deg,#051027 0%, #07112a 100%);color:var(--text);padding:18px;}
+    .top{display:flex;gap:12px;align-items:center;margin-bottom:14px;}
+    h1{margin:0;font-size:20px}
+    .wrap{display:grid;grid-template-columns:360px 1fr;gap:14px;}
+    @media(max-width:880px){ .wrap{grid-template-columns:1fr} }
+    .card{background:var(--card);border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(2,6,23,0.6);}
+    textarea{width:100%;height:150px;background:#041428;border:1px solid rgba(255,255,255,0.03);color:var(--text);padding:8px;border-radius:8px;resize:vertical;}
+    .btn{background:#06a0ff;border:none;padding:10px 12px;border-radius:8px;color:#fff;font-weight:600;cursor:pointer}
+    .smallbtn{background:#12243f;border:none;padding:8px 10px;border-radius:8px;color:var(--muted);cursor:pointer}
+    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+    .resultBox{margin-top:10px;padding:12px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border:1px solid rgba(255,255,255,0.03)}
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    thead th{background:var(--table-head);padding:10px;border-radius:6px;color:#fff;text-align:left;font-weight:600}
+    tbody td{padding:12px;border-bottom:1px dashed rgba(255,255,255,0.02)}
+    .num{font-weight:800;font-size:18px}
+    .num.green{color:#22c55e}
+    .num.red{color:#fb7185}
+    .num.purple{color:#c084fc}
+    .dot{width:12px;height:12px;border-radius:50%;display:inline-block;margin-left:6px;vertical-align:middle;border:2px solid rgba(255,255,255,0.06)}
+    .dot-label{font-size:12px;color:var(--muted);margin-left:6px}
+    .badge{display:inline-block;padding:6px 10px;border-radius:999px;font-weight:700}
+    .big{background:#063b1f;color:#c7f0d5}
+    .small{background:#2b1f00;color:#ffeaa3}
+    .pred{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .history-wrap{max-height:520px;overflow:auto;padding-right:6px}
+    .controls{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+    .muted{color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <h1>Jalwa — Next Color & Big/Small Predictor</h1>
+    <div style="margin-left:8px" class="muted">Paste history → Predict</div>
+  </div>
+
+  <div class="wrap">
+    <!-- Left: Input -->
+    <div class="card">
+      <label>Input mode</label>
+      <div style="display:flex;gap:8px">
+        <button class="smallbtn" id="modeSimple">Simple (numbers)</button>
+        <button class="smallbtn" id="modeTable">Table (period,number,colors)</button>
+      </div>
+
+      <label style="margin-top:12px">Paste history</label>
+      <textarea id="historyInput" placeholder="Simple: 5,1,4,0,9,5,4,7,1,1
+Table example:
+20251003100010183,5,green|pink
+20251003100010182,1,green
+(Each row: period,number,colors - colors sep by |)"></textarea>
+
+      <div class="controls">
+        <button class="btn" id="predictBtn">Predict Next</button>
+        <button class="smallbtn" id="clearBtn">Clear</button>
+        <div class="muted" style="margin-left:auto">Big=5-9 · Small=0-4</div>
+      </div>
+
+      <div id="outQuick" class="resultBox" style="display:none;margin-top:10px"></div>
+      <div style="margin-top:8px;font-size:12px;color:var(--muted)">Instructions: अगर आपके पास रंगों के साथ row है तो Table mode चुनें — वरना Simple mode में सिर्फ numbers डालें।</div>
+    </div>
+
+    <!-- Right: Table + Result -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700">Game history</div>
+        <div class="muted">Preview</div>
+      </div>
+
+      <div class="history-wrap" id="historyWrap" style="margin-top:8px">
+        <table id="histTable">
+          <thead><tr><th style="width:48%">Period</th><th style="width:18%">Number</th><th style="width:18%">Big Small</th><th style="width:16%">Color</th></tr></thead>
+          <tbody id="histBody"></tbody>
+        </table>
+      </div>
+
+      <div class="resultBox" id="predictionBox" style="margin-top:12px;display:none">
+        <div style="font-size:15px;font-weight:800;margin-bottom:8px">Prediction for next period</div>
+        <div class="pred" id="predContent"></div>
+        <div style="margin-top:8px;font-size:13px;color:var(--muted)" id="predDetails"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- helpers
+    const el = id => document.getElementById(id);
+    let mode = 'simple'; // simple or table
+
+    el('modeSimple').addEventListener('click', ()=>{ mode='simple'; el('modeSimple').style.background='#063b1f'; el('modeSimple').style.color='#fff'; el('modeTable').style.background=''; el('modeTable').style.color=''; });
+    el('modeTable').addEventListener('click', ()=>{ mode='table'; el('modeTable').style.background='#063b1f'; el('modeTable').style.color='#fff'; el('modeSimple').style.background=''; el('modeSimple').style.color=''; });
+
+    // init default
+    el('modeSimple').style.background='#063b1f'; el('modeSimple').style.color='#fff';
+
+    function parseHistory(text){
+      const lines = text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
+      const rows = [];
+      if(mode==='simple'){
+        // single line could be numbers separated by comma/space
+        const joined = lines.join(' ');
+        const parts = joined.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
+        parts.forEach((p,idx)=>{
+          const n = parseInt(p,10);
+          if(!isNaN(n) && n>=0 && n<=9){
+            rows.push({period: `#${idx+1}`, number: n, colors: []});
+          }
+        });
+      } else {
+        // table lines: period,number,color1|color2
+        lines.forEach((ln,idx)=>{
+          const parts = ln.split(',');
+          if(parts.length >= 2){
+            const period = parts[0].trim();
+            const n = parseInt(parts[1].trim(),10);
+            const colors = (parts[2] || '').split('|').map(s=>s.trim()).filter(Boolean);
+            if(!isNaN(n) && n>=0 && n<=9){
+              rows.push({period: period || `#${idx+1}`, number: n, colors});
+            }
+          }
+        });
+      }
+      return rows;
+    }
+
+    function renderTable(rows){
+      const tbody = el('histBody');
+      tbody.innerHTML = '';
+      // show latest at top (like screenshot)
+      const rev = rows.slice().reverse();
+      rev.forEach(r=>{
+        const tr = document.createElement('tr');
+        const tdPeriod = document.createElement('td');
+        tdPeriod.textContent = r.period;
+        const tdNum = document.createElement('td');
+        const spanNum = document.createElement('span');
+        spanNum.className = 'num ' + colorClassForNumber(r.number);
+        spanNum.textContent = r.number;
+        tdNum.appendChild(spanNum);
+        const tdBS = document.createElement('td');
+        tdBS.innerHTML = r.number>=5 ? '<span class="badge big">Big</span>' : '<span class="badge small">Small</span>';
+        const tdColor = document.createElement('td');
+        if(r.colors && r.colors.length){
+          r.colors.forEach(c=>{
+            const d = document.createElement('span');
+            d.className = 'dot';
+            d.style.background = colorNameToCss(c);
+            tdColor.appendChild(d);
+          });
+        } else {
+          tdColor.innerHTML = '<span class="dot" style="background:transparent;border:1px dashed rgba(255,255,255,0.04)"></span><span class="dot-label">no color</span>';
+        }
+        tr.appendChild(tdPeriod); tr.appendChild(tdNum); tr.appendChild(tdBS); tr.appendChild(tdColor);
+        tbody.appendChild(tr);
+      });
+    }
+
+    function colorNameToCss(name){
+      if(!name) return 'transparent';
+      const n = name.trim().toLowerCase();
+      if(n==='green' || n==='g') return '#22c55e';
+      if(n==='red' || n==='r') return '#fb7185';
+      if(n==='pink' || n==='magenta') return '#ff7ad9';
+      if(n==='purple' || n==='violet') return '#c084fc';
+      if(n==='blue' || n==='b') return '#60a5fa';
+      if(n==='orange' || n==='o') return '#fb923c';
+      if(n==='yellow' || n==='y') return '#facc15';
+      if(n==='black') return '#111827';
+      // fallback: try as hex
+      if(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(n)) return n;
+      // otherwise map hash
+      let hash = 0; for(let i=0;i<n.length;i++) hash = n.charCodeAt(i) + ((hash<<5)-hash);
+      const hue = Math.abs(hash) % 360;
+      return `hsl(${hue} 70% 55%)`;
+    }
+
+    function colorClassForNumber(n){
+      // decorate digit color for nice display (not actual game mapping)
+      if([1,7,9].includes(n)) return 'green';
+      if([4,0].includes(n)) return 'red';
+      if([5].includes(n)) return 'purple';
+      return '';
+    }
+
+    // Prediction logic
+    function predictFromRows(rows){
+      if(rows.length===0) return null;
+      // Number prediction: frequency of numbers (use all rows)
+      const counts = Array(10).fill(0);
+      rows.forEach(r=> counts[r.number]++);
+      const total = rows.length;
+      const probs = counts.map(c=>c/total);
+      // choose highest prob (if tie choose most recent tie-break)
+      let maxP = Math.max(...probs);
+      let candidates = [];
+      probs.forEach((p,i)=>{ if(p===maxP) candidates.push(i) });
+      // tie-breaker: pick candidate that appeared most recently
+      let predictedNum = candidates[0];
+      for(const c of candidates){
+        const idx = rows.map(r=>r.number).lastIndexOf(c);
+        const idxPred = rows.map(r=>r.number).lastIndexOf(predictedNum);
+        if(idx > idxPred) predictedNum = c;
+      }
+
+      // Color prediction: aggregate all colors
+      const colorCounts = {};
+      rows.forEach(r=>{
+        if(r.colors && r.colors.length){
+          r.colors.forEach(c=>{
+            const key = c.trim().toLowerCase();
+            if(!key) return;
+            colorCounts[key] = (colorCounts[key]||0)+1;
+          })
+        }
+      });
+      // produce sorted colors
+      const colorsSorted = Object.keys(colorCounts).sort((a,b)=>colorCounts[b]-colorCounts[a]);
+
+      // Big/Small prediction from predictedNum
+      const bs = predictedNum>=5 ? 'Big' : 'Small';
+
+      return {predictedNum, bs, colorCandidates: colorsSorted, probs};
+    }
+
+    // --- events
+    el('predictBtn').addEventListener('click', ()=>{
+      const txt = el('historyInput').value;
+      const rows = parseHistory(txt);
+      if(rows.length===0){
+        el('outQuick').style.display='block';
+        el('outQuick').innerHTML = "<span style='color:#ffd2d2'>कृपया history डालें (Simple numbers या Table rows)</span>";
+        el('predictionBox').style.display='none';
+        el('histBody').innerHTML = '';
+        return;
+      }
+      el('outQuick').style.display='none';
+      renderTable(rows);
+      const pred = predictFromRows(rows);
+      if(!pred){
+        el('predictionBox').style.display='none';
+        return;
+      }
+      el('predictionBox').style.display='block';
+      // pred content
+      const predContent = el('predContent');
+      predContent.innerHTML = `
+        <div style="min-width:110px;padding:10px;border-radius:10px;background:rgba(255,255,255,0.02);text-align:center">
+          <div style="font-size:28px;font-weight:900" class="${colorClassForNumber(pred.predictedNum)}">${pred.predictedNum}</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--muted)">Next Number</div>
+        </div>
+        <div style="min-width:120px;padding:10px;border-radius:10px;background:rgba(255,255,255,0.02);text-align:center">
+          <div style="font-size:16px;font-weight:900">${pred.bs}</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--muted)">Big / Small</div>
+        </div>
+        <div style="min-width:160px;padding:10px;border-radius:10px;background:rgba(255,255,255,0.02)">
+          <div style="font-size:13px;font-weight:800">Predicted Color(s)</div>
+          <div style="margin-top:8px" id="colorPreview"></div>
+        </div>
+      `;
+      // color preview
+      const cp = el('colorPreview');
+      cp.innerHTML = '';
+      if(pred.colorCandidates.length){
+        pred.colorCandidates.slice(0,2).forEach(c=>{
+          const s = document.createElement('span');
+          s.style.display='inline-flex';
+          s.style.alignItems='center';
+          s.style.gap='8px';
+          s.style.marginRight='8px';
+          s.innerHTML = `<span class="dot" style="background:${colorNameToCss(c)}"></span><span style="font-size:13px">${c}</span>`;
+          cp.appendChild(s);
+        });
+      } else {
+        cp.innerHTML = `<div class="muted">No color data — provide colors in Table mode to predict colors</div>`;
+      }
+
+      // details
+      el('predDetails').innerHTML = `Based on ${rows.length} rows. Number freq top pick: ${pred.predictedNum}. Color top: ${pred.colorCandidates[0]||'—'}.`;
+    });
+
+    el('clearBtn').addEventListener('click', ()=>{
+      el('historyInput').value='';
+      el('histBody').innerHTML='';
+      el('predictionBox').style.display='none';
+      el('outQuick').style.display='none';
+    });
+
+    // init with example from your screenshot (approx)
+    const example = [
+      '20251003100010183,5,green|pink',
+      '20251003100010182,1,green',
+      '20251003100010181,4,red',
+      '20251003100010180,0,red|pink',
+      '20251003100010179,9,green',
+      '20251003100010178,5,green|pink',
+      '20251003100010177,4,red',
+      '20251003100010176,7,green',
+      '20251003100010175,1,green',
+      '20251003100010174,1,green'
+    ].join('\n');
+    el('historyInput').value = example;
+    // render initial
+    el('predictBtn').click();
+  </script>
+</body>
+</html>
