@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Jalwa AI Predictor (Demo)</title>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:#0f172a; color:#e6eef8; padding:18px; }
+    .card { background:#0b1220; border-radius:12px; padding:18px; box-shadow: 0 6px 20px rgba(2,6,23,0.6); margin-bottom:12px; }
+    h1 { margin:0 0 8px 0; font-size:20px; color:#fff; }
+    label { display:block; margin:8px 0 6px 0; color:#bcd2ff; }
+    textarea { width:100%; min-height:90px; border-radius:8px; border:1px solid #1f2a44; padding:10px; background:#071025; color:#dff; }
+    select, button, input[type=checkbox] { padding:8px 10px; border-radius:8px; border:1px solid #20304e; background:#062036; color:#dff; }
+    button { cursor:pointer; margin-top:8px; }
+    .result { margin-top:12px; padding:12px; border-radius:8px; background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border:1px solid rgba(255,255,255,0.03); }
+    .bars { display:flex; gap:6px; margin-top:8px; align-items:end; height:120px; }
+    .bar { width:24px; border-radius:6px 6px 0 0; background:linear-gradient(180deg,#5eead4,#0284c7); display:flex; align-items:end; justify-content:center; color:#012; font-weight:700; }
+    .small { color:#ffd; font-weight:700; padding:6px 8px; border-radius:6px; background:#052238; display:inline-block; margin-right:6px; }
+    .disclaimer { font-size:12px; color:#9fb3ff; margin-top:8px; opacity:0.9; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    @media (max-width:640px){ .grid { grid-template-columns: 1fr; } .bars { justify-content:space-between; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Jalwa Next Period Predictor — AI Demo</h1>
+    <div style="color:#9fb3ff; font-size:13px;">अपना इतिहास नीचे डालें (0-9 के नंबर). उदाहरण: <span style="background:#091b33;padding:4px;border-radius:6px;">3,5,7,2,9,1,5,5,4</span></div>
+
+    <label>Past results (comma / space separated):</label>
+    <textarea id="historyInput" placeholder="उदाहरण: 3,5,7,2,9,1,5,5,4"></textarea>
+
+    <label>Algorithm:</label>
+    <select id="algo">
+      <option value="freq">Frequency (Simple)</option>
+      <option value="markov">Markov (Based on last number)</option>
+    </select>
+
+    <div style="margin-top:8px;">
+      <label><input type="checkbox" id="useWeightedRandom" checked /> भी Weighted-random दिखाओ (simulate)</label>
+    </div>
+
+    <button id="predictBtn">Predict Next</button>
+
+    <div id="out" class="result" style="display:none;"></div>
+    <div class="disclaimer">
+      नोट: यह टूल केवल शैक्षिक/मनोरंजन हेतु है — भविष्यवाणी की कोई गारंटी नहीं। Big = 5-9, Small = 0-4 (यदि आपकी प्रणाली अलग है तो कोड बदलें)।
+    </div>
+  </div>
+
+  <script>
+    // Utility helpers
+    function parseHistory(text){
+      if(!text) return [];
+      // split by comma or spaces
+      const parts = text.split(/[,\\s]+/).map(s=>s.trim()).filter(Boolean);
+      const nums = parts.map(x => {
+        const n = parseInt(x,10);
+        return Number.isFinite(n) && n>=0 && n<=9 ? n : null;
+      }).filter(n => n!==null);
+      return nums;
+    }
+
+    function freqPredict(history){
+      const counts = Array(10).fill(0);
+      history.forEach(n => counts[n]++);
+      const total = history.length || 1;
+      // Probabilities
+      const probs = counts.map(c => c/total);
+      // create top-3
+      const items = probs.map((p,i)=>({n:i,p})).sort((a,b)=>b.p-a.p);
+      return {probs, top: items.slice(0,3)};
+    }
+
+    function markovPredict(history){
+      // build 10x10 transition matrix
+      const T = Array.from({length:10},()=>Array(10).fill(0));
+      for(let i=0;i+1<history.length;i++){
+        const a = history[i], b = history[i+1];
+        T[a][b] += 1;
+      }
+      const last = history.length ? history[history.length-1] : null;
+      if(last===null) return freqPredict(history); // fallback
+      const row = T[last];
+      const rowSum = row.reduce((s,x)=>s+x,0);
+      if(rowSum===0) return freqPredict(history); // no transitions observed, fallback
+      const probs = row.map(x=>x/rowSum);
+      const items = probs.map((p,i)=>({n:i,p})).sort((a,b)=>b.p-a.p);
+      return {probs, top: items.slice(0,3), last};
+    }
+
+    function toBigSmallProb(probs){
+      // probs is array length 10, sum 1
+      const small = probs.slice(0,5).reduce((s,x)=>s+x,0);
+      const big = probs.slice(5,10).reduce((s,x)=>s+x,0);
+      return {small,big};
+    }
+
+    function weightedRandomByProbs(probs){
+      const r = Math.random();
+      let cum = 0;
+      for(let i=0;i<probs.length;i++){
+        cum += probs[i];
+        if(r <= cum) return i;
+      }
+      return probs.length-1;
+    }
+
+    document.getElementById('predictBtn').addEventListener('click',()=>{
+      const text = document.getElementById('historyInput').value;
+      const history = parseHistory(text);
+      const algo = document.getElementById('algo').value;
+      const useWeighted = document.getElementById('useWeightedRandom').checked;
+
+      const outEl = document.getElementById('out');
+      outEl.style.display = 'block';
+      if(history.length === 0){
+        outEl.innerHTML = '<div style="color:#ffd2d2">कृपया इतिहास डालें (कम से कम 1 नंबर)</div>';
+        return;
+      }
+
+      let res;
+      if(algo === 'freq'){
+        res = freqPredict(history);
+      } else {
+        res = markovPredict(history);
+      }
+
+      // ensure probs sum to 1 (freqPredict used history length, markov uses row)
+      let probs = res.probs;
+      const sum = probs.reduce((s,x)=>s+x,0);
+      if(sum <= 0) {
+        probs = Array(10).fill(1/10);
+      } else {
+        probs = probs.map(x=>x/sum);
+      }
+
+      const top = res.top;
+      const mostLikely = top.length ? top[0].n : weightedRandomByProbs(probs);
+
+      const bs = toBigSmallProb(probs);
+      const bsPred = bs.big > bs.small ? 'Big (5-9)' : (bs.small > bs.big ? 'Small (0-4)' : 'Tie');
+
+      // weighted random simulation
+      let weightedPick = null;
+      if(useWeighted){
+        weightedPick = weightedRandomByProbs(probs);
+      }
+
+      // Build output HTML
+      let html = '';
+      html += `<div style="display:flex;justify-content:space-between;align-items:center"><div><strong style="font-size:18px">Most likely next number: ${mostLikely}</strong><div style="margin-top:6px"><span class="small">Algorithm:</span> ${algo === 'freq' ? 'Frequency' : 'Markov'}</div></div><div style="text-align:right"><div style="font-size:16px;color:#b7f5d0">Big/Small prediction: <strong>${bsPred}</strong></div><div style="font-size:12px;color:#9fb3ff;margin-top:6px">P(Big)=${(bs.big*100).toFixed(1)}% &nbsp; P(Small)=${(bs.small*100).toFixed(1)}%</div></div></div>`;
+
+      html += `<div style="margin-top:12px"><strong>Top 3 candidates:</strong><ol style="padding-left:18px">`;
+      top.forEach(it => {
+        html += `<li>Number ${it.n} — ${(it.p*100).toFixed(1)}%</li>`;
+      });
+      html += `</ol></div>`;
+
+      // Bars
+      html += `<div style="margin-top:6px"><strong>Distribution (0→9):</strong>`;
+      html += `<div class="bars">`;
+      for(let i=0;i<10;i++){
+        const height = Math.max(6, Math.round(probs[i]*100)); // min height
+        html += `<div style="height:${height}px" class="bar">${probs[i] > 0.06 ? i : ''}</div>`;
+      }
+      html += `</div></div>`;
+
+      if(useWeighted){
+        html += `<div style="margin-top:10px"><strong>Weighted-random pick (simulated):</strong> ${weightedPick} </div>`;
+      }
+
+      html += `<div style="margin-top:10px;font-size:13px;color:#9fb3ff">History length: ${history.length}. Recent sequence: ${history.slice(-12).join(', ')}</div>`;
+
+      // small tip
+      html += `<div style="margin-top:10px;border-top:1px dashed rgba(255,255,255,0.03);padding-top:8px;font-size:13px;color:#cfe6ff">Tip: Markov तब अच्छा काम कर सकता है जब आपकी सिरीज़ में लगातार patterns हों (यानी एक नंबर के बाद अक्सर वही अगला नंबर आता है). Frequency तभी अच्छा होगा जब कुछ नंबर अधिक बार आ रहे हों।</div>`;
+
+      outEl.innerHTML = html;
+    });
+
+  </script>
+</body>
+</html><!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Jalwa AI Predictor (Demo)</title>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:#0f172a; color:#e6eef8; padding:18px; }
+    .card { background:#0b1220; border-radius:12px; padding:18px; box-shadow: 0 6px 20px rgba(2,6,23,0.6); margin-bottom:12px; }
+    h1 { margin:0 0 8px 0; font-size:20px; color:#fff; }
+    label { display:block; margin:8px 0 6px 0; color:#bcd2ff; }
+    textarea { width:100%; min-height:90px; border-radius:8px; border:1px solid #1f2a44; padding:10px; background:#071025; color:#dff; }
+    select, button, input[type=checkbox] { padding:8px 10px; border-radius:8px; border:1px solid #20304e; background:#062036; color:#dff; }
+    button { cursor:pointer; margin-top:8px; }
+    .result { margin-top:12px; padding:12px; border-radius:8px; background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border:1px solid rgba(255,255,255,0.03); }
+    .bars { display:flex; gap:6px; margin-top:8px; align-items:end; height:120px; }
+    .bar { width:24px; border-radius:6px 6px 0 0; background:linear-gradient(180deg,#5eead4,#0284c7); display:flex; align-items:end; justify-content:center; color:#012; font-weight:700; }
+    .small { color:#ffd; font-weight:700; padding:6px 8px; border-radius:6px; background:#052238; display:inline-block; margin-right:6px; }
+    .disclaimer { font-size:12px; color:#9fb3ff; margin-top:8px; opacity:0.9; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    @media (max-width:640px){ .grid { grid-template-columns: 1fr; } .bars { justify-content:space-between; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Jalwa Next Period Predictor — AI Demo</h1>
+    <div style="color:#9fb3ff; font-size:13px;">अपना इतिहास नीचे डालें (0-9 के नंबर). उदाहरण: <span style="background:#091b33;padding:4px;border-radius:6px;">3,5,7,2,9,1,5,5,4</span></div>
+
+    <label>Past results (comma / space separated):</label>
+    <textarea id="historyInput" placeholder="उदाहरण: 3,5,7,2,9,1,5,5,4"></textarea>
+
+    <label>Algorithm:</label>
+    <select id="algo">
+      <option value="freq">Frequency (Simple)</option>
+      <option value="markov">Markov (Based on last number)</option>
+    </select>
+
+    <div style="margin-top:8px;">
+      <label><input type="checkbox" id="useWeightedRandom" checked /> भी Weighted-random दिखाओ (simulate)</label>
+    </div>
+
+    <button id="predictBtn">Predict Next</button>
+
+    <div id="out" class="result" style="display:none;"></div>
+    <div class="disclaimer">
+      नोट: यह टूल केवल शैक्षिक/मनोरंजन हेतु है — भविष्यवाणी की कोई गारंटी नहीं। Big = 5-9, Small = 0-4 (यदि आपकी प्रणाली अलग है तो कोड बदलें)।
+    </div>
+  </div>
+
+  <script>
+    // Utility helpers
+    function parseHistory(text){
+      if(!text) return [];
+      // split by comma or spaces
+      const parts = text.split(/[,\\s]+/).map(s=>s.trim()).filter(Boolean);
+      const nums = parts.map(x => {
+        const n = parseInt(x,10);
+        return Number.isFinite(n) && n>=0 && n<=9 ? n : null;
+      }).filter(n => n!==null);
+      return nums;
+    }
+
+    function freqPredict(history){
+      const counts = Array(10).fill(0);
+      history.forEach(n => counts[n]++);
+      const total = history.length || 1;
+      // Probabilities
+      const probs = counts.map(c => c/total);
+      // create top-3
+      const items = probs.map((p,i)=>({n:i,p})).sort((a,b)=>b.p-a.p);
+      return {probs, top: items.slice(0,3)};
+    }
+
+    function markovPredict(history){
+      // build 10x10 transition matrix
+      const T = Array.from({length:10},()=>Array(10).fill(0));
+      for(let i=0;i+1<history.length;i++){
+        const a = history[i], b = history[i+1];
+        T[a][b] += 1;
+      }
+      const last = history.length ? history[history.length-1] : null;
+      if(last===null) return freqPredict(history); // fallback
+      const row = T[last];
+      const rowSum = row.reduce((s,x)=>s+x,0);
+      if(rowSum===0) return freqPredict(history); // no transitions observed, fallback
+      const probs = row.map(x=>x/rowSum);
+      const items = probs.map((p,i)=>({n:i,p})).sort((a,b)=>b.p-a.p);
+      return {probs, top: items.slice(0,3), last};
+    }
+
+    function toBigSmallProb(probs){
+      // probs is array length 10, sum 1
+      const small = probs.slice(0,5).reduce((s,x)=>s+x,0);
+      const big = probs.slice(5,10).reduce((s,x)=>s+x,0);
+      return {small,big};
+    }
+
+    function weightedRandomByProbs(probs){
+      const r = Math.random();
+      let cum = 0;
+      for(let i=0;i<probs.length;i++){
+        cum += probs[i];
+        if(r <= cum) return i;
+      }
+      return probs.length-1;
+    }
+
+    document.getElementById('predictBtn').addEventListener('click',()=>{
+      const text = document.getElementById('historyInput').value;
+      const history = parseHistory(text);
+      const algo = document.getElementById('algo').value;
+      const useWeighted = document.getElementById('useWeightedRandom').checked;
+
+      const outEl = document.getElementById('out');
+      outEl.style.display = 'block';
+      if(history.length === 0){
+        outEl.innerHTML = '<div style="color:#ffd2d2">कृपया इतिहास डालें (कम से कम 1 नंबर)</div>';
+        return;
+      }
+
+      let res;
+      if(algo === 'freq'){
+        res = freqPredict(history);
+      } else {
+        res = markovPredict(history);
+      }
+
+      // ensure probs sum to 1 (freqPredict used history length, markov uses row)
+      let probs = res.probs;
+      const sum = probs.reduce((s,x)=>s+x,0);
+      if(sum <= 0) {
+        probs = Array(10).fill(1/10);
+      } else {
+        probs = probs.map(x=>x/sum);
+      }
+
+      const top = res.top;
+      const mostLikely = top.length ? top[0].n : weightedRandomByProbs(probs);
+
+      const bs = toBigSmallProb(probs);
+      const bsPred = bs.big > bs.small ? 'Big (5-9)' : (bs.small > bs.big ? 'Small (0-4)' : 'Tie');
+
+      // weighted random simulation
+      let weightedPick = null;
+      if(useWeighted){
+        weightedPick = weightedRandomByProbs(probs);
+      }
+
+      // Build output HTML
+      let html = '';
+      html += `<div style="display:flex;justify-content:space-between;align-items:center"><div><strong style="font-size:18px">Most likely next number: ${mostLikely}</strong><div style="margin-top:6px"><span class="small">Algorithm:</span> ${algo === 'freq' ? 'Frequency' : 'Markov'}</div></div><div style="text-align:right"><div style="font-size:16px;color:#b7f5d0">Big/Small prediction: <strong>${bsPred}</strong></div><div style="font-size:12px;color:#9fb3ff;margin-top:6px">P(Big)=${(bs.big*100).toFixed(1)}% &nbsp; P(Small)=${(bs.small*100).toFixed(1)}%</div></div></div>`;
+
+      html += `<div style="margin-top:12px"><strong>Top 3 candidates:</strong><ol style="padding-left:18px">`;
+      top.forEach(it => {
+        html += `<li>Number ${it.n} — ${(it.p*100).toFixed(1)}%</li>`;
+      });
+      html += `</ol></div>`;
+
+      // Bars
+      html += `<div style="margin-top:6px"><strong>Distribution (0→9):</strong>`;
+      html += `<div class="bars">`;
+      for(let i=0;i<10;i++){
+        const height = Math.max(6, Math.round(probs[i]*100)); // min height
+        html += `<div style="height:${height}px" class="bar">${probs[i] > 0.06 ? i : ''}</div>`;
+      }
+      html += `</div></div>`;
+
+      if(useWeighted){
+        html += `<div style="margin-top:10px"><strong>Weighted-random pick (simulated):</strong> ${weightedPick} </div>`;
+      }
+
+      html += `<div style="margin-top:10px;font-size:13px;color:#9fb3ff">History length: ${history.length}. Recent sequence: ${history.slice(-12).join(', ')}</div>`;
+
+      // small tip
+      html += `<div style="margin-top:10px;border-top:1px dashed rgba(255,255,255,0.03);padding-top:8px;font-size:13px;color:#cfe6ff">Tip: Markov तब अच्छा काम कर सकता है जब आपकी सिरीज़ में लगातार patterns हों (यानी एक नंबर के बाद अक्सर वही अगला नंबर आता है). Frequency तभी अच्छा होगा जब कुछ नंबर अधिक बार आ रहे हों।</div>`;
+
+      outEl.innerHTML = html;
+    });
+
+  </script>
+</body>
+</html>
